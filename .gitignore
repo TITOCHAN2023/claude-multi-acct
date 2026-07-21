@@ -1,0 +1,13 @@
+# 绝不提交任何账号凭证 / 配置目录内容
+accounts/*
+!accounts/.gitkeep
+
+# claude 可能落地的明文凭证与轮询游标 (双保险)
+.credentials.json
+**/.credentials.json
+.rotation
+**/.rotation
+
+# 杂项
+.DS_Store
+*.log
