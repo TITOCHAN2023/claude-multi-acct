@@ -61,16 +61,32 @@ source ~/.bashrc
 
 ```bash
 cc2 add work2            # 新增账号 work2 并交互登录 (/login)
-cc2 add work3 --global   # 新增并直接共享全局设置(整个目录软链到 ~/.claude)
+cc2 add work3 --global   # 新增并直接共享全局设置(选择性软链具体子项)
 cc2 work2                # 以 work2 账号启动 claude
 cc2 work2 --resume       # 参数原样透传给 claude
 cc2 next                 # 轮询: 自动挑下一个账号启动, 均摊用量
-cc2 link work2           # 切到[全局]: 软链到 ~/.claude (链接前自动备份独立目录)
-cc2 unlink work2         # 切回[独立]: 断开软链, 从备份恢复独立目录
-cc2 ls                   # 列出账号 / [独立]或[全局] / 登录状态
-cc2 rm work2             # 删除账号 (软链只删链接, 从不碰 ~/.claude)
+cc2 link work2           # 切到[全局]: 软链 skills/plugins/settings 等子项到 ~/.claude
+cc2 unlink work2         # 切回[独立]: 断开软链, 从备份恢复
+cc2 set work2 skip on    # 打开 --dangerously-skip-permissions (默认关)
+cc2 set work2 rc on      # 打开 --remote-control (默认关)
+cc2 set default skip on  # 也可给垫底账号设开关
+cc2 ls                   # 列出账号 / 模式 / 启动参数开关 / 登录邮箱 / 凭证
+cc2 rm work2             # 删除账号 (从不碰 ~/.claude)
 cc2 help
 ```
+
+## 启动参数开关
+
+`--dangerously-skip-permissions` 和 `--remote-control` 是**每账号独立的开关，默认全部关闭**，用 `cc2 set` 打开/关闭，`cc2 ls` 可查看：
+
+```bash
+cc2 set <账号|default> skip on|off   # skip = --dangerously-skip-permissions
+cc2 set <账号|default> rc   on|off   # rc   = --remote-control
+```
+
+- 状态用账号目录里的标记文件记录（`.cma-flag-skip` / `.cma-flag-rc`），不进 git、不进软链清单。
+- `default` 指垫底账号（回落时使用）。
+- 启动时按开关动态拼接参数；都关则不带任何危险参数（最安全默认）。
 
 并行跑：在不同终端分别 `cc2 alpha`、`cc2 beta`、`cc2 gamma`，互不干扰，各耗各的用量。
 
