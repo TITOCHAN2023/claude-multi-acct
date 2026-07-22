@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -69,6 +70,7 @@ var providerVars = map[string]bool{
 var reserved = map[string]bool{
 	"add": true, "rm": true, "ls": true, "list": true, "next": true,
 	"link": true, "unlink": true, "set": true, "default": true,
+	"use": true, "restore": true, "version": true,
 	"help": true, "-h": true, "--help": true,
 }
 
@@ -180,6 +182,76 @@ func oauthToken(configDir string) (token string, expiresAt int64) {
 		return "", 0
 	}
 	return c.OAuth.AccessToken, c.OAuth.ExpiresAt
+}
+
+func osUser() string {
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return "claude-code-user"
+}
+
+// 读某 keychain 服务名的原始值 (去尾换行)
+func keychainRead(service string) ([]byte, bool) {
+	out, err := exec.Command("security", "find-generic-password", "-s", service, "-w").Output()
+	if err != nil {
+		return nil, false
+	}
+	return bytes.TrimRight(out, "\n"), true
+}
+
+// 写某 keychain 服务名 (-U 存在则更新)
+func keychainWrite(service string, data []byte) error {
+	return exec.Command("security", "add-generic-password",
+		"-a", osUser(), "-s", service, "-w", string(data), "-U").Run()
+}
+
+func defaultClaudeJSON() string { return filepath.Join(home(), ".claude.json") }
+func activePath() string        { return filepath.Join(cmaHome(), ".active") }
+func slotBackupDir() string     { return filepath.Join(cmaHome(), ".slot-backup") }
+
+func readActive() string {
+	b, _ := os.ReadFile(activePath())
+	return strings.TrimSpace(string(b))
+}
+func writeActive(name string) { os.WriteFile(activePath(), []byte(name), 0o644) }
+
+func copyFile(src, dst string, perm os.FileMode) error {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, perm)
+}
+
+// 只把 src(.claude.json) 里的"身份字段"合并进 dst, 保留 dst 其余本机状态
+func mergeIdentity(src, dst string) error {
+	sb, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	var sm, dm map[string]json.RawMessage
+	if json.Unmarshal(sb, &sm) != nil {
+		return fmt.Errorf("账号 .claude.json 解析失败")
+	}
+	if db, e := os.ReadFile(dst); e == nil {
+		json.Unmarshal(db, &dm)
+	}
+	if dm == nil {
+		dm = map[string]json.RawMessage{}
+	}
+	for _, k := range []string{"oauthAccount", "cachedUsageUtilization"} {
+		if v, ok := sm[k]; ok {
+			dm[k] = v
+		} else {
+			delete(dm, k)
+		}
+	}
+	out, err := json.MarshalIndent(dm, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, out, 0o600)
 }
 
 // 实时查询: GET /api/oauth/usage (纯查询, 不消耗对话额度; 不刷新/不写 keychain)。
@@ -611,6 +683,7 @@ func cmdLs() {
 	row("账号", "模式", "启动参数", "已用5h/7d", "登录邮箱", "凭证")
 	fmt.Println("  " + strings.Repeat("-", 90))
 	row("默认(垫底)", "-", flagsLabel(cmaHome()), label(home()), emailOf(home()), "cc 垫底,永不修改")
+	active := readActive()
 	for _, name := range names {
 		dir := accountDir(name)
 		mode := "[独立]"
@@ -621,13 +694,18 @@ func cmdLs() {
 		if loggedIn(dir, dir) {
 			status = "✓ 已登录"
 		}
-		row(name, mode, flagsLabel(dir), label(dir), emailOf(dir), status)
+		disp := name
+		if name == active {
+			disp = name + " ★"
+		}
+		row(disp, mode, flagsLabel(dir), label(dir), emailOf(dir), status)
 	}
 	if len(names) == 0 {
 		fmt.Println("  (还没有账号, 用 cc2 add <名字> 添加)")
 	}
 	fmt.Println("  启动参数: skip=--dangerously-skip-permissions  rc=--remote-control")
 	fmt.Println("  已用5h/7d: 实时查询各账号剩余额度(5小时/7天已用%); ~前缀=token过期回退的缓存值")
+	fmt.Println("  ★ = cc2 use 设为默认(cc)槽位的账号; cc2 use <账号> 切换, cc2 restore 还原")
 }
 
 // 列出 CMA_HOME 下的账号名(跳过 .isolated 备份, 只取目录)
@@ -672,6 +750,102 @@ func cmdNext(args []string) {
 
 // ---------- help / main ----------
 
+// 备份当前默认槽位 (keychain + ~/.claude.json + 来源账号), 供 cc2 restore 还原
+func backupDefaultSlot() {
+	bdir := slotBackupDir()
+	os.MkdirAll(bdir, 0o700)
+	if cred, ok := keychainRead(serviceName("")); ok {
+		os.WriteFile(filepath.Join(bdir, "credentials.json"), cred, 0o600)
+	}
+	if b, err := os.ReadFile(defaultClaudeJSON()); err == nil {
+		os.WriteFile(filepath.Join(bdir, "claude.json"), b, 0o600)
+	}
+	os.WriteFile(filepath.Join(bdir, "from"), []byte(readActive()), 0o644)
+}
+
+// cc2 use <账号> [--full]: 把账号凭证覆盖到默认全局环境(cc 用的槽位)
+// 默认只换登录身份(oauthAccount); --full 整体覆盖 .claude.json。覆盖前自动备份。
+func cmdUse(args []string) {
+	full, name := false, ""
+	for _, a := range args {
+		if a == "--full" {
+			full = true
+		} else if name == "" {
+			name = a
+		}
+	}
+	if name == "" {
+		die("用法: cc2 use <账号> [--full]  (默认只换登录身份; --full 整体覆盖 .claude.json)")
+	}
+	dir := accountDir(name)
+	if !isDir(dir) {
+		die("账号 '%s' 不存在", name)
+	}
+	xcred, ok := keychainRead(serviceName(dir))
+	if !ok {
+		die("账号 '%s' 没有 keychain 凭证, 先 cc2 %s 登录", name, name)
+	}
+	backupDefaultSlot() // 打破"垫底不可改", 先留后路
+	if err := keychainWrite(serviceName(""), xcred); err != nil {
+		die("写默认 keychain 失败: %v", err)
+	}
+	xjson := filepath.Join(dir, ".claude.json")
+	mode := "只换登录身份"
+	if full {
+		mode = "整体覆盖 .claude.json"
+		if err := copyFile(xjson, defaultClaudeJSON(), 0o600); err != nil {
+			die("覆盖 ~/.claude.json 失败: %v", err)
+		}
+	} else {
+		if err := mergeIdentity(xjson, defaultClaudeJSON()); err != nil {
+			die("合并登录身份失败: %v", err)
+		}
+	}
+	writeActive(name)
+	fmt.Printf("✅ 默认账号(cc)已切换为 '%s' <%s> [%s]\n", name, emailOf(dir), mode)
+	fmt.Println("   不带参数的 cc/默认 claude 现在用该账号; cc2 restore 可还原上一个默认。")
+}
+
+// cc2 restore: 从最近一次 use 前的备份还原默认槽位
+func cmdRestore() {
+	bdir := slotBackupDir()
+	cred, err := os.ReadFile(filepath.Join(bdir, "credentials.json"))
+	if err != nil {
+		die("没有可恢复的备份 (还没执行过 cc2 use)")
+	}
+	if err := keychainWrite(serviceName(""), bytes.TrimRight(cred, "\n")); err != nil {
+		die("还原默认 keychain 失败: %v", err)
+	}
+	if b, e := os.ReadFile(filepath.Join(bdir, "claude.json")); e == nil {
+		os.WriteFile(defaultClaudeJSON(), b, 0o600)
+	}
+	from, _ := os.ReadFile(filepath.Join(bdir, "from"))
+	writeActive(strings.TrimSpace(string(from)))
+	fmt.Println("✅ 已从备份还原默认账号槽位。")
+}
+
+// 首次引导: 账号库为空且默认账号已登录时, 把默认账号存档为账号'1'(全局模式)
+func maybeInit() {
+	if os.Getenv("CMA_NO_INIT") != "" || len(listAccounts()) > 0 {
+		return
+	}
+	cred, ok := keychainRead(serviceName(""))
+	if !ok {
+		return // 默认账号还没登录, 无可存档
+	}
+	dir := accountDir("1")
+	if os.MkdirAll(dir, 0o755) != nil {
+		return
+	}
+	keychainWrite(serviceName(dir), cred)
+	if b, err := os.ReadFile(defaultClaudeJSON()); err == nil {
+		os.WriteFile(filepath.Join(dir, ".claude.json"), b, 0o600)
+	}
+	fmt.Fprintln(os.Stderr, "cc2: 首次初始化 —— 已把默认账号存档为账号 '1' (全局模式)")
+	linkItems(dir)
+	writeActive("1")
+}
+
 func cmdHelp() {
 	fmt.Print(`cc2 — 官网多账号并行 / 轮询 (默认账号永远垫底, 不会被本工具修改)
 
@@ -684,8 +858,14 @@ func cmdHelp() {
                               skip=--dangerously-skip-permissions  rc=--remote-control
   cc2 ls                    列出账号 / 模式 / 启动参数 / 登录邮箱 / 凭证状态
   cc2 rm <名字>             删除某账号目录 (从不碰 ~/.claude)
+  cc2 use <名字> [--full]    把该账号凭证覆盖到默认环境(cc 用的); 覆盖前自动备份
+                              默认只换登录身份; --full 整体覆盖 .claude.json
+  cc2 restore               还原 cc2 use 前备份的默认账号
   cc2 version               显示版本
   cc2 help                  本帮助
+
+首次安装且账号库为空时, 会自动把默认账号存档为账号 '1'(全局模式)。
+(设 CMA_NO_INIT=1 可跳过该引导)
 
 说明:
   * 每个账号是一个 CLAUDE_CONFIG_DIR 目录, 凭证由 claude 按目录路径 hash 隔离,
@@ -706,6 +886,12 @@ func main() {
 	if len(args) > 1 {
 		rest = args[1:]
 	}
+	// version/help 不触发初始化; 其余命令先做首次引导(仅库空时动作)
+	switch verb {
+	case "version", "-v", "--version", "help", "-h", "--help", "":
+	default:
+		maybeInit()
+	}
 	switch verb {
 	case "add":
 		cmdAdd(rest)
@@ -721,6 +907,10 @@ func main() {
 		cmdUnlink(rest)
 	case "set":
 		cmdSet(rest)
+	case "use":
+		cmdUse(rest)
+	case "restore":
+		cmdRestore()
 	case "version", "-v", "--version":
 		fmt.Println("cc2 " + version)
 	case "help", "-h", "--help", "":

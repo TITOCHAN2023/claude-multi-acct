@@ -125,6 +125,20 @@ cc2 set <账号|default> rc   on|off   # rc   = --remote-control
 - `default` 指垫底账号（回落时使用）。
 - 启动时按开关动态拼接参数；都关则不带任何危险参数（最安全默认）。
 
+## 默认账号槽位（init / use / restore）
+
+把 `cc`（不带 `CLAUDE_CONFIG_DIR`）用的默认环境看成一个**可切换的"激活槽位"**，账号库里的账号可随时提升为默认。
+
+- **首次引导（init）**：首次安装、账号库为空且默认账号已登录时，自动把默认账号存档为账号 `1`（全局模式）。已有账号则不触发。设 `CMA_NO_INIT=1` 可跳过。
+- **`cc2 use <账号> [--full]`**：把该账号的凭证覆盖到默认环境，于是 `cc`/默认 claude 就变成该账号。
+  - 默认**只换登录身份**（keychain 凭证 + `~/.claude.json` 里的 `oauthAccount`/用量），保留默认账号的 projects/skillUsage 等本机状态。
+  - `--full`：整体覆盖 `~/.claude.json`。
+  - **覆盖前自动备份**当前默认到 `~/.cc2/.slot-backup/`。
+- **`cc2 restore`**：从备份一键还原上一次 `use` 前的默认账号。
+- `cc2 ls` 中 **★** 标记当前默认槽位对应的账号。
+
+> ⚠️ 这是唯一会**主动写入默认账号凭证**的功能（打破早期"垫底永不改"的约定）；但每次都先备份、`cc2 restore` 可还原。已验证 `use`→`restore` 对 `~/.claude.json` 字节级无损。
+
 并行跑：在不同终端分别 `cc2 alpha`、`cc2 beta`、`cc2 gamma`，互不干扰，各耗各的用量。
 
 ## 独立 / 全局 两种模式
