@@ -51,17 +51,48 @@ flowchart TD
 
 ## 安装
 
-需要 Go（1.25+）。编译成单二进制装到 `~/.local/bin/cc2`（已在 PATH）：
-
-```bash
-cd ~/Project/claude-multi-acct
-make install          # = go build -o ~/.local/bin/cc2 .
-# 自定义安装位置: make install BIN=/somewhere/cc2
-```
-
 装好后**无需 source 任何东西**，新开终端直接用 `cc2`。数据目录默认 `~/Project/claude-multi-acct/accounts`（可用 `CMA_HOME` 覆盖）。
 
-> 早期为 shell 脚本版（`cma.sh`，需 source 到 `.bashrc`），现已用 Go 重写，去掉了对 `python3`/`shasum` 的依赖、修正了中文对齐。旧版仍在 git 历史里。
+### 方式一：Homebrew（推荐）
+
+```bash
+brew install TITOCHAN2023/tap/cc2
+# 升级
+brew update && brew upgrade cc2
+```
+
+### 方式二：直接下载预编译二进制
+
+```bash
+# macOS Apple Silicon (其余: cc2-darwin-amd64 / cc2-linux-amd64 / cc2-linux-arm64)
+curl -L https://github.com/TITOCHAN2023/claude-multi-acct/releases/latest/download/cc2-darwin-arm64 \
+  -o ~/.local/bin/cc2 && chmod +x ~/.local/bin/cc2
+```
+
+### 方式三：go install
+
+```bash
+go install github.com/TITOCHAN2023/claude-multi-acct@latest
+# 产出的二进制名为 claude-multi-acct, 按需改名/软链:
+ln -sf "$(go env GOPATH)/bin/claude-multi-acct" ~/.local/bin/cc2
+```
+
+### 方式四：源码编译
+
+```bash
+git clone https://github.com/TITOCHAN2023/claude-multi-acct
+cd claude-multi-acct && make install        # -> ~/.local/bin/cc2
+# 自定义位置: make install BIN=/somewhere/cc2
+```
+
+> 早期为 shell 脚本版（`cma.sh`，需 source 到 `.bashrc`），现已用 Go 重写成单二进制，去掉了对 `python3`/`shasum` 的依赖、修正了中文对齐。旧版仍在 git 历史里。
+
+## 发版（维护者）
+
+```bash
+make release VERSION=x.y.z        # 交叉编译 dist/cc2-* + SHA256SUMS
+./scripts/release.sh x.y.z        # 建 GitHub Release 并自动更新 homebrew-tap formula
+```
 
 ## 用法
 
