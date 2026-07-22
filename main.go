@@ -14,13 +14,17 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 )
 
 // 版本号 (由 -ldflags "-X main.version=..." 注入; 默认 dev)
@@ -146,9 +150,79 @@ func emailOf(dir string) string {
 	return d.OAuthAccount.EmailAddress
 }
 
-// 读 <dir>/.claude.json 里 claude 缓存的用量百分比 (5小时/7天 已用%)。
-// 这是各账号上次运行 claude 时缓存的值, 非实时; 读不到返回 "-"。
-func usageOf(dir string) string {
+type utilField struct {
+	U *float64 `json:"utilization"`
+}
+
+func pctOrDash(p *float64) string {
+	if p == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%.0f%%", *p)
+}
+
+func nowMs() int64 { return time.Now().UnixMilli() }
+
+// 读该 configDir 账号在 keychain 里的 oauth access token 与过期时间(ms)。
+// configDir="" 表示默认账号 (服务名无后缀)。
+func oauthToken(configDir string) (token string, expiresAt int64) {
+	out, err := exec.Command("security", "find-generic-password", "-s", serviceName(configDir), "-w").Output()
+	if err != nil {
+		return "", 0
+	}
+	var c struct {
+		OAuth struct {
+			AccessToken string `json:"accessToken"`
+			ExpiresAt   int64  `json:"expiresAt"`
+		} `json:"claudeAiOauth"`
+	}
+	if json.Unmarshal(out, &c) != nil {
+		return "", 0
+	}
+	return c.OAuth.AccessToken, c.OAuth.ExpiresAt
+}
+
+// 实时查询: GET /api/oauth/usage (纯查询, 不消耗对话额度; 不刷新/不写 keychain)。
+// token 缺失或已过期或请求失败 -> ok=false。
+func usageLive(configDir string) (string, bool) {
+	tok, exp := oauthToken(configDir)
+	if tok == "" || (exp > 0 && exp <= nowMs()) {
+		return "", false
+	}
+	req, err := http.NewRequest("GET", "https://api.anthropic.com/api/oauth/usage", nil)
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 6 * time.Second}).Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", false
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var d struct {
+		FiveHour *utilField `json:"five_hour"`
+		SevenDay *utilField `json:"seven_day"`
+	}
+	if json.Unmarshal(body, &d) != nil {
+		return "", false
+	}
+	f := func(u *utilField) string {
+		if u == nil {
+			return "-"
+		}
+		return pctOrDash(u.U)
+	}
+	return f(d.FiveHour) + "/" + f(d.SevenDay), true
+}
+
+// 回退: 读 <dir>/.claude.json 里 claude 上次缓存的用量 (非实时)。
+func usageCached(dir string) string {
 	b, err := os.ReadFile(filepath.Join(dir, ".claude.json"))
 	if err != nil {
 		return "-"
@@ -156,12 +230,8 @@ func usageOf(dir string) string {
 	var d struct {
 		Cached struct {
 			Util struct {
-				FiveHour struct {
-					U *float64 `json:"utilization"`
-				} `json:"five_hour"`
-				SevenDay struct {
-					U *float64 `json:"utilization"`
-				} `json:"seven_day"`
+				FiveHour utilField `json:"five_hour"`
+				SevenDay utilField `json:"seven_day"`
 			} `json:"utilization"`
 		} `json:"cachedUsageUtilization"`
 	}
@@ -172,13 +242,15 @@ func usageOf(dir string) string {
 	if f == nil && s == nil {
 		return "-"
 	}
-	part := func(p *float64) string {
-		if p == nil {
-			return "?"
-		}
-		return fmt.Sprintf("%.0f%%", *p)
+	return pctOrDash(f) + "/" + pctOrDash(s)
+}
+
+// 优先实时查询, 失败回退缓存。返回 (显示串, 是否实时)。
+func usageOf(dir, configDir string) (string, bool) {
+	if s, ok := usageLive(configDir); ok {
+		return s, true
 	}
-	return part(f) + "/" + part(s)
+	return usageCached(dir), false
 }
 
 // flagDir=存放开关标记文件的目录 (默认账号传 CMA_HOME)
@@ -501,24 +573,44 @@ func row(cols ...string) {
 
 func cmdLs() {
 	os.MkdirAll(cmaHome(), 0o755)
+	names := listAccounts()
+
+	// 并发预取用量: key=dir, 结果含 显示串 + 是否实时。默认账号 key=home。
+	type ures struct {
+		s    string
+		live bool
+	}
+	jobs := map[string]string{home(): ""} // dir -> configDir
+	for _, n := range names {
+		jobs[accountDir(n)] = accountDir(n)
+	}
+	usage := map[string]ures{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for dir, cfg := range jobs {
+		wg.Add(1)
+		go func(dir, cfg string) {
+			defer wg.Done()
+			s, live := usageOf(dir, cfg)
+			mu.Lock()
+			usage[dir] = ures{s, live}
+			mu.Unlock()
+		}(dir, cfg)
+	}
+	wg.Wait()
+	// 缓存值(非实时)加 ~ 前缀以示区分
+	label := func(dir string) string {
+		u := usage[dir]
+		if !u.live && u.s != "-" {
+			return "~" + u.s
+		}
+		return u.s
+	}
+
 	fmt.Printf("账号根目录: %s   (启动参数默认全关, 用 cc2 set 开关)\n", cmaHome())
 	row("账号", "模式", "启动参数", "已用5h/7d", "登录邮箱", "凭证")
 	fmt.Println("  " + strings.Repeat("-", 90))
-	row("默认(垫底)", "-", flagsLabel(cmaHome()), usageOf(home()), emailOf(home()), "cc 垫底,永不修改")
-
-	entries, _ := os.ReadDir(cmaHome())
-	var names []string
-	for _, e := range entries {
-		name := e.Name()
-		if strings.HasSuffix(name, ".isolated") {
-			continue
-		}
-		if !isDir(accountDir(name)) { // 只列目录(含软链到目录)
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	row("默认(垫底)", "-", flagsLabel(cmaHome()), label(home()), emailOf(home()), "cc 垫底,永不修改")
 	for _, name := range names {
 		dir := accountDir(name)
 		mode := "[独立]"
@@ -529,19 +621,17 @@ func cmdLs() {
 		if loggedIn(dir, dir) {
 			status = "✓ 已登录"
 		}
-		row(name, mode, flagsLabel(dir), usageOf(dir), emailOf(dir), status)
+		row(name, mode, flagsLabel(dir), label(dir), emailOf(dir), status)
 	}
 	if len(names) == 0 {
 		fmt.Println("  (还没有账号, 用 cc2 add <名字> 添加)")
 	}
 	fmt.Println("  启动参数: skip=--dangerously-skip-permissions  rc=--remote-control")
-	fmt.Println("  已用5h/7d: 各账号上次运行 claude 时缓存的用量百分比(非实时)")
+	fmt.Println("  已用5h/7d: 实时查询各账号剩余额度(5小时/7天已用%); ~前缀=token过期回退的缓存值")
 }
 
-// ---------- 轮询 ----------
-
-func cmdNext(args []string) {
-	os.MkdirAll(cmaHome(), 0o755)
+// 列出 CMA_HOME 下的账号名(跳过 .isolated 备份, 只取目录)
+func listAccounts() []string {
 	entries, _ := os.ReadDir(cmaHome())
 	var names []string
 	for _, e := range entries {
@@ -551,12 +641,20 @@ func cmdNext(args []string) {
 		}
 		names = append(names, name)
 	}
+	sort.Strings(names)
+	return names
+}
+
+// ---------- 轮询 ----------
+
+func cmdNext(args []string) {
+	os.MkdirAll(cmaHome(), 0o755)
+	names := listAccounts()
 	if len(names) == 0 {
 		fmt.Fprintln(os.Stderr, "cc2: 还没有任何账号 —— 回落默认账号(垫底)")
 		runDefault(args)
 		return
 	}
-	sort.Strings(names)
 	rot := filepath.Join(cmaHome(), ".rotation")
 	cursor := 0
 	if b, err := os.ReadFile(rot); err == nil {
