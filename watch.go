@@ -5,11 +5,47 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
+
+func watchPidFile() string { return filepath.Join(cmaHome(), ".watch.pid") }
+
+func readWatchPid() int {
+	b, err := os.ReadFile(watchPidFile())
+	if err != nil {
+		return 0
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	return pid
+}
+
+// 进程是否存活 (signal 0 探测)
+func processAlive(pid int) bool { return pid > 0 && syscall.Kill(pid, 0) == nil }
+
+func watchStop() {
+	pid := readWatchPid()
+	if !processAlive(pid) {
+		os.Remove(watchPidFile())
+		fmt.Println(L("no running cc2 watch found.", "没有正在运行的 cc2 watch。"))
+		return
+	}
+	syscall.Kill(pid, syscall.SIGTERM)
+	os.Remove(watchPidFile())
+	fmt.Printf(L("stopped cc2 watch (pid %d).\n", "已停止 cc2 watch (pid %d)。\n"), pid)
+}
+
+func watchStatus() {
+	pid := readWatchPid()
+	if processAlive(pid) {
+		fmt.Printf(L("cc2 watch is running (pid %d).\n", "cc2 watch 正在运行 (pid %d)。\n"), pid)
+	} else {
+		fmt.Println(L("cc2 watch is not running.", "cc2 watch 未运行。"))
+	}
+}
 
 // 默认账号(垫底)是否有活跃 session (存在无 CLAUDE_CONFIG_DIR 的 claude 主进程)
 func defaultHasActiveSession() bool {
@@ -60,6 +96,27 @@ func ts() string { return time.Now().Format("15:04:05") }
 
 // cc2 watch [间隔秒] [阈值%]: 常驻监测默认(垫底)账号, 逼近阈值自动 use 下一个账号
 func cmdWatch(args []string) {
+	// 子命令: stop / status
+	if len(args) > 0 {
+		switch args[0] {
+		case "stop", "off":
+			watchStop()
+			return
+		case "status":
+			watchStatus()
+			return
+		}
+	}
+	// 防重复启动
+	if pid := readWatchPid(); processAlive(pid) {
+		fmt.Printf(L("cc2 watch already running (pid %d); stop it with: cc2 watch stop\n",
+			"cc2 watch 已在运行 (pid %d); 用 cc2 watch stop 停止\n"), pid)
+		return
+	}
+	os.MkdirAll(cmaHome(), 0o755)
+	os.WriteFile(watchPidFile(), fmt.Appendf(nil, "%d", os.Getpid()), 0o644)
+	defer os.Remove(watchPidFile())
+
 	interval := 60 * time.Second
 	threshold := 95.0
 	var nums []string

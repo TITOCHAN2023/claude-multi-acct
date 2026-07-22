@@ -171,6 +171,8 @@ cc2 watch                 # 默认: 每 60s 检查, 阈值 95%
 cc2 watch 30 90           # 每 30s 检查, 阈值 90%
 # 后台常驻:
 nohup cc2 watch > ~/.cc2/watch.log 2>&1 &
+cc2 watch status         # 查看是否在跑
+cc2 watch stop           # 停止 (前台跑则直接 Ctrl-C)
 ```
 - 只在默认账号**有活跃 session 时**才查用量（省 API、避免限流；最小间隔 15s）。
 - 自动切换=覆盖默认槽位凭证（同 `cc2 use`，覆盖前自动备份，可 `cc2 restore`）。

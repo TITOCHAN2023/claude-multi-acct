@@ -937,6 +937,7 @@ func cmdHelp() {
   cc2 restore               restore the default account backed up before cc2 use
   cc2 sessions              list all in-use claude sessions (account/project/title/busy)
   cc2 watch [interval_s] [threshold%]  daemon: watch default account, auto-switch near threshold (95%)
+  cc2 watch stop | status             stop the running watch daemon / show its status
   cc2 setlanguage <english|chinese>   set UI language
   cc2 version               show version
   cc2 help                  this help
@@ -966,6 +967,7 @@ Notes:
   cc2 restore               还原 cc2 use 前备份的默认账号
   cc2 sessions              列出所有正在使用的 claude session (账号/项目/标题/忙闲)
   cc2 watch [间隔s] [阈值%]  常驻监测默认账号, 逼近阈值(默认95%)自动切下一个账号
+  cc2 watch stop | status   停止正在运行的 watch / 查看其状态
   cc2 setlanguage <english|chinese>   设置界面语言
   cc2 version               显示版本
   cc2 help                  本帮助
