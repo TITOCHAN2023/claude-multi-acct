@@ -37,7 +37,7 @@ func env(key, def string) string {
 	return def
 }
 
-func cmaHome() string   { return env("CMA_HOME", filepath.Join(home(), "Project/claude-multi-acct/accounts")) }
+func cmaHome() string   { return env("CMA_HOME", filepath.Join(home(), ".cc2")) }
 func globalDir() string { return env("CMA_GLOBAL_DIR", filepath.Join(home(), ".claude")) }
 
 func globalLinks() []string {

@@ -51,7 +51,7 @@ flowchart TD
 
 ## 安装
 
-装好后**无需 source 任何东西**，新开终端直接用 `cc2`。数据目录默认 `~/Project/claude-multi-acct/accounts`（可用 `CMA_HOME` 覆盖）。
+装好后**无需 source 任何东西**，新开终端直接用 `cc2`。账号数据默认放 `~/.cc2/`（与 `~/.claude` 同级的规范位置，可用 `CMA_HOME` 覆盖）。
 
 ### 方式一：Homebrew（推荐）
 
@@ -171,7 +171,7 @@ stateDiagram-v2
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `CMA_HOME` | `~/Project/claude-multi-acct/accounts` | 账号数据根目录 |
+| `CMA_HOME` | `~/.cc2` | 账号数据根目录 |
 | `CMA_GLOBAL_DIR` | `~/.claude` | [全局]模式软链的目标 |
 | `CMA_GLOBAL_LINKS` | `settings.json CLAUDE.md skills plugins commands agents sessions projects todos` | [全局]模式软链的具体子项清单 |
 | `CMA_CLAUDE_FLAGS` | 空 | 额外附加的启动参数（逃生阀）；`skip`/`rc` 请用 `cc2 set` 开关 |
