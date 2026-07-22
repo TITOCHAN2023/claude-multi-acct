@@ -71,7 +71,7 @@ var reserved = map[string]bool{
 	"add": true, "rm": true, "ls": true, "list": true, "next": true,
 	"link": true, "unlink": true, "set": true, "default": true,
 	"use": true, "restore": true, "sessions": true, "ps": true,
-	"watch": true, "version": true,
+	"watch": true, "setlanguage": true, "lang": true, "version": true,
 	"help": true, "-h": true, "--help": true,
 }
 
@@ -96,13 +96,15 @@ func die(format string, a ...any) {
 // 校验账号名: 合法字符 + 非保留词 + 无路径穿越
 func validName(name string) error {
 	if name == "" {
-		return fmt.Errorf("账号名不能为空")
+		return fmt.Errorf("%s", L("account name cannot be empty", "账号名不能为空"))
 	}
 	if reserved[name] {
-		return fmt.Errorf("'%s' 是保留词, 不能作账号名", name)
+		return fmt.Errorf(L("'%s' is a reserved word and cannot be an account name",
+			"'%s' 是保留词, 不能作账号名"), name)
 	}
 	if !nameRe.MatchString(name) {
-		return fmt.Errorf("非法账号名 '%s' (只能用 [A-Za-z0-9._-])", name)
+		return fmt.Errorf(L("invalid account name '%s' (only [A-Za-z0-9._-])",
+			"非法账号名 '%s' (只能用 [A-Za-z0-9._-])"), name)
 	}
 	return nil
 }
@@ -111,7 +113,7 @@ func validName(name string) error {
 func mustSafe(dir string) {
 	rel, err := filepath.Rel(cmaHome(), dir)
 	if err != nil || strings.HasPrefix(rel, "..") {
-		die("拒绝操作 CMA_HOME 之外的目录 %s", dir)
+		die(L("refusing to operate on a dir outside CMA_HOME %s", "拒绝操作 CMA_HOME 之外的目录 %s"), dir)
 	}
 }
 
@@ -233,7 +235,7 @@ func mergeIdentity(src, dst string) error {
 	}
 	var sm, dm map[string]json.RawMessage
 	if json.Unmarshal(sb, &sm) != nil {
-		return fmt.Errorf("账号 .claude.json 解析失败")
+		return fmt.Errorf("%s", L("failed to parse account .claude.json", "账号 .claude.json 解析失败"))
 	}
 	if db, e := os.ReadFile(dst); e == nil {
 		json.Unmarshal(db, &dm)
@@ -393,7 +395,7 @@ func flagDirOf(name string) string {
 func execClaude(configDir, flagDir string, passArgs []string) {
 	path, err := exec.LookPath("claude")
 	if err != nil {
-		die("找不到 claude 可执行文件: %v", err)
+		die(L("cannot find the claude executable: %v", "找不到 claude 可执行文件: %v"), err)
 	}
 	argv := []string{"claude"}
 	argv = append(argv, flagsFor(flagDir)...)
@@ -414,7 +416,7 @@ func execClaude(configDir, flagDir string, passArgs []string) {
 
 	// syscall.Exec 替换当前进程 -> 交互式 claude 完全接管终端
 	if err := syscall.Exec(path, argv, newEnv); err != nil {
-		die("exec claude 失败: %v", err)
+		die(L("exec claude failed: %v", "exec claude 失败: %v"), err)
 	}
 }
 
@@ -425,7 +427,8 @@ func runDefault(args []string) { execClaude("", cmaHome(), args) }
 func launch(name string, args []string) {
 	dir := accountDir(name)
 	if name == "" || !isDir(dir) {
-		fmt.Fprintf(os.Stderr, "cc2: 未知账号 '%s' —— 回落默认账号(垫底)\n", name)
+		fmt.Fprintf(os.Stderr, L("cc2: unknown account '%s' — falling back to the default account\n",
+			"cc2: 未知账号 '%s' —— 回落默认账号(垫底)\n"), name)
 		runDefault(args)
 		return
 	}
@@ -436,7 +439,7 @@ func launch(name string, args []string) {
 
 func cmdAdd(args []string) {
 	if len(args) == 0 {
-		die("用法: cc2 add <账号名> [--global] [claude参数...]")
+		die(L("usage: cc2 add <name> [--global] [claude args...]", "用法: cc2 add <账号名> [--global] [claude参数...]"))
 	}
 	name := args[0]
 	rest := args[1:]
@@ -450,53 +453,58 @@ func cmdAdd(args []string) {
 	}
 	dir := accountDir(name)
 	if exists(dir) {
-		die("账号 '%s' 已存在, 用 cc2 rm 先删或换名", name)
+		die(L("account '%s' already exists; cc2 rm it first or pick another name",
+			"账号 '%s' 已存在, 用 cc2 rm 先删或换名"), name)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		die("无法创建 %s: %v", dir, err)
+		die(L("cannot create %s: %v", "无法创建 %s: %v"), dir, err)
 	}
 	if global {
-		fmt.Printf("▶ 账号 '%s' [全局]: 软链共享子项 -> %s (.claude.json/凭证仍独立)\n", name, globalDir())
+		fmt.Printf(L("▶ account '%s' [global]: symlinking shared items -> %s (.claude.json/creds stay isolated)\n",
+			"▶ 账号 '%s' [全局]: 软链共享子项 -> %s (.claude.json/凭证仍独立)\n"), name, globalDir())
 		linkItems(dir)
 	} else {
-		fmt.Printf("▶ 账号 '%s' [独立]: %s\n", name, dir)
+		fmt.Printf(L("▶ account '%s' [isolated]: %s\n", "▶ 账号 '%s' [独立]: %s\n"), name, dir)
 	}
-	fmt.Printf("▶ 即将启动交互登录。若没自动弹出, 在会话里输入 /login。登录完成退出后即可 cc2 %s 启动。\n", name)
+	fmt.Printf(L("▶ launching interactive login. If it doesn't pop up, type /login in the session. After logging in and quitting, run cc2 %s.\n",
+		"▶ 即将启动交互登录。若没自动弹出, 在会话里输入 /login。登录完成退出后即可 cc2 %s 启动。\n"), name)
 	execClaude(dir, dir, rest) // 新账号无开关 -> 纯净登录
 }
 
 func cmdRm(args []string) {
 	if len(args) == 0 {
-		die("用法: cc2 rm <账号名>")
+		die(L("usage: cc2 rm <name>", "用法: cc2 rm <账号名>"))
 	}
 	name := args[0]
 	dir := accountDir(name)
 	mustSafe(dir)
 	if !exists(dir) {
-		die("账号 '%s' 不存在", name)
+		die(L("account '%s' does not exist", "账号 '%s' 不存在"), name)
 	}
 	if isSymlink(dir) {
 		os.Remove(dir) // 只删软链, 不碰目标
-		fmt.Printf("已删除账号 '%s' (全局软链, 未触碰 %s)\n", name, globalDir())
+		fmt.Printf(L("removed account '%s' (global symlink; %s untouched)\n",
+			"已删除账号 '%s' (全局软链, 未触碰 %s)\n"), name, globalDir())
 	} else {
 		os.RemoveAll(dir)
-		fmt.Printf("已删除账号 '%s' (%s)\n", name, dir)
+		fmt.Printf(L("removed account '%s' (%s)\n", "已删除账号 '%s' (%s)\n"), name, dir)
 	}
 	if bak := dir + ".isolated"; isDir(bak) {
 		os.RemoveAll(bak)
-		fmt.Printf("已清理备份 %s\n", bak)
+		fmt.Printf(L("cleaned backup %s\n", "已清理备份 %s\n"), bak)
 	}
-	fmt.Printf("提示: keychain 凭证条目未删, 如需彻底清理:\n  security delete-generic-password -s %q\n", serviceName(dir))
+	fmt.Printf(L("note: keychain entry not removed; to fully clean up:\n  security delete-generic-password -s %q\n",
+		"提示: keychain 凭证条目未删, 如需彻底清理:\n  security delete-generic-password -s %q\n"), serviceName(dir))
 }
 
 func cmdSet(args []string) {
 	if len(args) < 3 {
-		die("用法: cc2 set <账号|default> <skip|rc> <on|off>")
+		die(L("usage: cc2 set <name|default> <skip|rc> <on|off>", "用法: cc2 set <账号|default> <skip|rc> <on|off>"))
 	}
 	name, key, val := args[0], args[1], args[2]
 	fd := flagDirOf(name)
 	if name != "default" && !isDir(fd) {
-		die("账号 '%s' 不存在", name)
+		die(L("account '%s' does not exist", "账号 '%s' 不存在"), name)
 	}
 	var file string
 	switch key {
@@ -505,7 +513,7 @@ func cmdSet(args []string) {
 	case "rc", "remote", "remote-control":
 		file = flagFileRC(fd)
 	default:
-		die("未知开关 '%s' (可用: skip / rc)", key)
+		die(L("unknown flag '%s' (use: skip / rc)", "未知开关 '%s' (可用: skip / rc)"), key)
 	}
 	switch val {
 	case "on", "1", "true", "yes":
@@ -517,7 +525,7 @@ func cmdSet(args []string) {
 		os.Remove(file)
 		fmt.Printf("%s: %s = off\n", name, key)
 	default:
-		die("值只能是 on / off")
+		die(L("value must be on / off", "值只能是 on / off"))
 	}
 }
 
@@ -538,7 +546,8 @@ func linkItems(dir string) {
 		}
 		bak := dst + ".isolated"
 		if exists(bak) {
-			fmt.Printf("  跳过 %s (备份 %s.isolated 已存在, 请手动处理)\n", item, item)
+			fmt.Printf(L("  skip %s (backup %s.isolated exists, handle manually)\n",
+				"  跳过 %s (备份 %s.isolated 已存在, 请手动处理)\n"), item, item)
 			continue
 		}
 		if exists(dst) {
@@ -551,28 +560,30 @@ func linkItems(dir string) {
 			fmt.Printf("  link: %s -> %s\n", item, src)
 		}
 	}
-	fmt.Printf("  共链接 %d 项; .claude.json / .credentials.json 保持账号独立(不共享登录态)\n", n)
+	fmt.Printf(L("  linked %d item(s); .claude.json / .credentials.json stay per-account (login not shared)\n",
+		"  共链接 %d 项; .claude.json / .credentials.json 保持账号独立(不共享登录态)\n"), n)
 }
 
 func cmdLink(args []string) {
 	if len(args) == 0 {
-		die("用法: cc2 link <账号名>")
+		die(L("usage: cc2 link <name>", "用法: cc2 link <账号名>"))
 	}
 	name := args[0]
 	dir := accountDir(name)
 	if isSymlink(dir) {
-		die("'%s' 是旧版整目录软链(有串号风险), 请先 cc2 unlink %s 修复再 link", name, name)
+		die(L("'%s' is an old whole-dir symlink (cross-account risk); run cc2 unlink %s first, then link",
+			"'%s' 是旧版整目录软链(有串号风险), 请先 cc2 unlink %s 修复再 link"), name, name)
 	}
 	if !isDir(dir) {
-		die("账号 '%s' 不存在, 先 cc2 add %s", name, name)
+		die(L("account '%s' does not exist; run cc2 add %s first", "账号 '%s' 不存在, 先 cc2 add %s"), name, name)
 	}
-	fmt.Printf("账号 '%s' -> [全局]\n", name)
+	fmt.Printf(L("account '%s' -> [global]\n", "账号 '%s' -> [全局]\n"), name)
 	linkItems(dir)
 }
 
 func cmdUnlink(args []string) {
 	if len(args) == 0 {
-		die("用法: cc2 unlink <账号名>")
+		die(L("usage: cc2 unlink <name>", "用法: cc2 unlink <账号名>"))
 	}
 	name := args[0]
 	dir := accountDir(name)
@@ -586,11 +597,12 @@ func cmdUnlink(args []string) {
 		} else {
 			os.MkdirAll(dir, 0o755)
 		}
-		fmt.Printf("账号 '%s' 已从旧版整目录软链恢复[独立]\n", name)
+		fmt.Printf(L("account '%s' restored to [isolated] from old whole-dir symlink\n",
+			"账号 '%s' 已从旧版整目录软链恢复[独立]\n"), name)
 		return
 	}
 	if !isDir(dir) {
-		die("账号 '%s' 不存在", name)
+		die(L("account '%s' does not exist", "账号 '%s' 不存在"), name)
 	}
 	n := 0
 	for _, item := range globalLinks() {
@@ -608,7 +620,7 @@ func cmdUnlink(args []string) {
 		n++
 		fmt.Printf("  unlink: %s\n", item)
 	}
-	fmt.Printf("账号 '%s' -> [独立] (恢复 %d 项)\n", name, n)
+	fmt.Printf(L("account '%s' -> [isolated] (restored %d item(s))\n", "账号 '%s' -> [独立] (恢复 %d 项)\n"), name, n)
 }
 
 func isGlobal(dir string) bool {
@@ -710,20 +722,23 @@ func cmdLs(args []string) {
 		return u.s
 	}
 
-	fmt.Printf("账号根目录: %s   (启动参数默认全关, 用 cc2 set 开关)\n", cmaHome())
-	row("账号", "模式", "启动参数", "已用5h/7d", "登录邮箱", "凭证")
+	fmt.Printf(L("Account root: %s   (launch flags off by default; toggle with cc2 set)\n",
+		"账号根目录: %s   (启动参数默认全关, 用 cc2 set 开关)\n"), cmaHome())
+	row(L("ACCOUNT", "账号"), L("MODE", "模式"), L("FLAGS", "启动参数"),
+		L("USED 5h/7d", "已用5h/7d"), L("EMAIL", "登录邮箱"), L("CREDS", "凭证"))
 	fmt.Println("  " + strings.Repeat("-", 90))
-	row("默认(垫底)", "-", flagsLabel(cmaHome()), label(home()), emailOf(home()), "cc 垫底,永不修改")
+	row(L("default", "默认(垫底)"), "-", flagsLabel(cmaHome()), label(home()), emailOf(home()),
+		L("fallback, never modified", "cc 垫底,永不修改"))
 	active := readActive()
 	for _, name := range names {
 		dir := accountDir(name)
-		mode := "[独立]"
+		mode := L("[isolated]", "[独立]")
 		if isGlobal(dir) {
-			mode = "[全局]"
+			mode = L("[global]", "[全局]")
 		}
-		status := "· 未登录"
+		status := L("· not logged in", "· 未登录")
 		if loggedIn(dir, dir) {
-			status = "✓ 已登录"
+			status = L("✓ logged in", "✓ 已登录")
 		}
 		disp := name
 		if name == active {
@@ -732,11 +747,15 @@ func cmdLs(args []string) {
 		row(disp, mode, flagsLabel(dir), label(dir), emailOf(dir), status)
 	}
 	if len(names) == 0 {
-		fmt.Println("  (还没有账号, 用 cc2 add <名字> 添加)")
+		fmt.Println(L("  (no accounts yet; add one with: cc2 add <name>)",
+			"  (还没有账号, 用 cc2 add <名字> 添加)"))
 	}
-	fmt.Println("  启动参数: skip=--dangerously-skip-permissions  rc=--remote-control")
-	fmt.Println("  已用5h/7d: 实时查询各账号剩余额度(5小时/7天已用%); ~前缀=token过期回退的缓存值")
-	fmt.Println("  ★ = cc2 use 设为默认(cc)槽位的账号; cc2 use <账号> 切换, cc2 restore 还原")
+	fmt.Println(L("  flags: skip=--dangerously-skip-permissions  rc=--remote-control",
+		"  启动参数: skip=--dangerously-skip-permissions  rc=--remote-control"))
+	fmt.Println(L("  USED 5h/7d: live per-account remaining quota (5-hour/7-day used %); ~ prefix = cached (token expired)",
+		"  已用5h/7d: 实时查询各账号剩余额度(5小时/7天已用%); ~前缀=token过期回退的缓存值"))
+	fmt.Println(L("  ★ = account currently on the default (cc) slot; cc2 use <name> to switch, cc2 restore to undo",
+		"  ★ = cc2 use 设为默认(cc)槽位的账号; cc2 use <账号> 切换, cc2 restore 还原"))
 }
 
 // 列出 CMA_HOME 下的账号名(默认跳过 . 开头的内部目录和 .isolated 备份)
@@ -766,7 +785,8 @@ func cmdNext(args []string) {
 	os.MkdirAll(cmaHome(), 0o755)
 	names := listAccounts()
 	if len(names) == 0 {
-		fmt.Fprintln(os.Stderr, "cc2: 还没有任何账号 —— 回落默认账号(垫底)")
+		fmt.Fprintln(os.Stderr, L("cc2: no accounts yet — falling back to the default account",
+			"cc2: 还没有任何账号 —— 回落默认账号(垫底)"))
 		runDefault(args)
 		return
 	}
@@ -781,7 +801,8 @@ func cmdNext(args []string) {
 	idx := cursor % len(names)
 	pick := names[idx]
 	os.WriteFile(rot, fmt.Appendf(nil, "%d", (idx+1)%len(names)), 0o644)
-	fmt.Printf("▶ 轮询选中账号: %s  (第 %d/%d 个)\n", pick, idx+1, len(names))
+	fmt.Printf(L("▶ rotation picked account: %s  (%d/%d)\n", "▶ 轮询选中账号: %s  (第 %d/%d 个)\n"),
+		pick, idx+1, len(names))
 	launch(pick, args)
 }
 
@@ -812,17 +833,20 @@ func cmdUse(args []string) {
 		}
 	}
 	if name == "" {
-		die("用法: cc2 use <账号> [--full]  (默认只换登录身份; --full 整体覆盖 .claude.json)")
+		die(L("usage: cc2 use <name> [--full]  (default: identity only; --full overwrites all of .claude.json)",
+			"用法: cc2 use <账号> [--full]  (默认只换登录身份; --full 整体覆盖 .claude.json)"))
 	}
 	if err := doUse(name, full); err != nil {
 		die("%v", err)
 	}
-	mode := "只换登录身份"
+	mode := L("identity only", "只换登录身份")
 	if full {
-		mode = "整体覆盖 .claude.json"
+		mode = L("full .claude.json overwrite", "整体覆盖 .claude.json")
 	}
-	fmt.Printf("✅ 默认账号(cc)已切换为 '%s' <%s> [%s]\n", name, emailOf(accountDir(name)), mode)
-	fmt.Println("   不带参数的 cc/默认 claude 现在用该账号; cc2 restore 可还原上一个默认。")
+	fmt.Printf(L("✅ default account (cc) switched to '%s' <%s> [%s]\n",
+		"✅ 默认账号(cc)已切换为 '%s' <%s> [%s]\n"), name, emailOf(accountDir(name)), mode)
+	fmt.Println(L("   the bare cc / default claude now uses this account; cc2 restore undoes it.",
+		"   不带参数的 cc/默认 claude 现在用该账号; cc2 restore 可还原上一个默认。"))
 }
 
 // use 的核心: 备份默认槽位 -> 覆盖凭证 -> 覆盖/合并 .claude.json -> 记 active。
@@ -830,24 +854,25 @@ func cmdUse(args []string) {
 func doUse(name string, full bool) error {
 	dir := accountDir(name)
 	if !isDir(dir) {
-		return fmt.Errorf("账号 '%s' 不存在", name)
+		return fmt.Errorf(L("account '%s' does not exist", "账号 '%s' 不存在"), name)
 	}
 	xcred, ok := keychainRead(serviceName(dir))
 	if !ok {
-		return fmt.Errorf("账号 '%s' 没有 keychain 凭证, 先 cc2 %s 登录", name, name)
+		return fmt.Errorf(L("account '%s' has no keychain creds; run cc2 %s to log in first",
+			"账号 '%s' 没有 keychain 凭证, 先 cc2 %s 登录"), name, name)
 	}
 	backupDefaultSlot() // 打破"垫底不可改", 先留后路
 	if err := keychainWrite(serviceName(""), xcred); err != nil {
-		return fmt.Errorf("写默认 keychain 失败: %v", err)
+		return fmt.Errorf(L("failed to write default keychain: %v", "写默认 keychain 失败: %v"), err)
 	}
 	xjson := filepath.Join(dir, ".claude.json")
 	if full {
 		if err := copyFile(xjson, defaultClaudeJSON(), 0o600); err != nil {
-			return fmt.Errorf("覆盖 ~/.claude.json 失败: %v", err)
+			return fmt.Errorf(L("failed to overwrite ~/.claude.json: %v", "覆盖 ~/.claude.json 失败: %v"), err)
 		}
 	} else {
 		if err := mergeIdentity(xjson, defaultClaudeJSON()); err != nil {
-			return fmt.Errorf("合并登录身份失败: %v", err)
+			return fmt.Errorf(L("failed to merge login identity: %v", "合并登录身份失败: %v"), err)
 		}
 	}
 	writeActive(name)
@@ -859,17 +884,17 @@ func cmdRestore() {
 	bdir := slotBackupDir()
 	cred, err := os.ReadFile(filepath.Join(bdir, "credentials.json"))
 	if err != nil {
-		die("没有可恢复的备份 (还没执行过 cc2 use)")
+		die(L("no backup to restore (cc2 use was never run)", "没有可恢复的备份 (还没执行过 cc2 use)"))
 	}
 	if err := keychainWrite(serviceName(""), bytes.TrimRight(cred, "\n")); err != nil {
-		die("还原默认 keychain 失败: %v", err)
+		die(L("failed to restore default keychain: %v", "还原默认 keychain 失败: %v"), err)
 	}
 	if b, e := os.ReadFile(filepath.Join(bdir, "claude.json")); e == nil {
 		os.WriteFile(defaultClaudeJSON(), b, 0o600)
 	}
 	from, _ := os.ReadFile(filepath.Join(bdir, "from"))
 	writeActive(strings.TrimSpace(string(from)))
-	fmt.Println("✅ 已从备份还原默认账号槽位。")
+	fmt.Println(L("✅ default account slot restored from backup.", "✅ 已从备份还原默认账号槽位。"))
 }
 
 // 首次引导: 账号库为空且默认账号已登录时, 把默认账号存档为账号'1'(全局模式)
@@ -889,13 +914,43 @@ func maybeInit() {
 	if b, err := os.ReadFile(defaultClaudeJSON()); err == nil {
 		os.WriteFile(filepath.Join(dir, ".claude.json"), b, 0o600)
 	}
-	fmt.Fprintln(os.Stderr, "cc2: 首次初始化 —— 已把默认账号存档为账号 '1' (全局模式)")
+	fmt.Fprintln(os.Stderr, L("cc2: first-run init — archived the default account as account '1' (global mode)",
+		"cc2: 首次初始化 —— 已把默认账号存档为账号 '1' (全局模式)"))
 	linkItems(dir)
 	writeActive("1")
 }
 
 func cmdHelp() {
-	fmt.Print(`cc2 — 官网多账号并行 / 轮询 (默认账号永远垫底, 不会被本工具修改)
+	fmt.Print(L(`cc2 — run/rotate multiple Claude web accounts (the default account is always the fallback)
+
+  cc2 add <name> [--global]  add an account and log in; --global shares global settings
+  cc2 <name> [args...]       launch claude as that account (args pass through, e.g. --resume)
+  cc2 next [args...]         rotate: auto-pick the next account to spread usage
+  cc2 link <name>           switch to [global]: symlink skills/plugins/settings into ~/.claude
+  cc2 unlink <name>         switch to [isolated]: remove those symlinks, restore from backup
+  cc2 set <name|default> skip|rc on|off   toggle launch flags (all off by default):
+                              skip=--dangerously-skip-permissions  rc=--remote-control
+  cc2 ls [-a]               list accounts / mode / flags / usage / email / creds (-a: internals)
+  cc2 rm <name>             remove an account dir (never touches ~/.claude)
+  cc2 use <name> [--full]    copy an account's creds onto the default env (cc uses it); auto-backup first
+                              default: identity only; --full overwrites all of .claude.json
+  cc2 restore               restore the default account backed up before cc2 use
+  cc2 sessions              list all in-use claude sessions (account/project/title/busy)
+  cc2 watch [interval_s] [threshold%]  daemon: watch default account, auto-switch near threshold (95%)
+  cc2 setlanguage <english|chinese>   set UI language
+  cc2 version               show version
+  cc2 help                  this help
+
+On first run with an empty account library, the default account is auto-archived as account '1' (global mode).
+(set CMA_NO_INIT=1 to skip that bootstrap)
+
+Notes:
+  * Each account is a CLAUDE_CONFIG_DIR dir; claude isolates creds by a hash of the dir path,
+    so different accounts can run in parallel across terminals, each spending its own quota.
+  * [global] mode only symlinks identity-free items; .claude.json (login) / .credentials.json (creds)
+    are never symlinked — each account's login stays fully independent, never crossed.
+  * Existing cc / ccr / ccl are unaffected; any resolution failure falls back to the default account.
+`, `cc2 — 官网多账号并行 / 轮询 (默认账号永远垫底, 不会被本工具修改)
 
   cc2 add <名字> [--global]  新增账号并交互登录; --global 直接共享全局设置
   cc2 <名字> [参数...]        以该账号启动 claude (参数原样透传, 如 --resume)
@@ -911,6 +966,7 @@ func cmdHelp() {
   cc2 restore               还原 cc2 use 前备份的默认账号
   cc2 sessions              列出所有正在使用的 claude session (账号/项目/标题/忙闲)
   cc2 watch [间隔s] [阈值%]  常驻监测默认账号, 逼近阈值(默认95%)自动切下一个账号
+  cc2 setlanguage <english|chinese>   设置界面语言
   cc2 version               显示版本
   cc2 help                  本帮助
 
@@ -923,7 +979,7 @@ func cmdHelp() {
   * [全局]模式只软链无身份的子项; .claude.json(登录态)/.credentials.json(凭证)
     永不软链 —— 各账号登录态完全独立, 绝不串号。
   * 现有的 cc / ccr / ccl 完全不受影响; 任何解析失败一律回落默认账号。
-`)
+`))
 }
 
 func main() {
@@ -936,6 +992,7 @@ func main() {
 	if len(args) > 1 {
 		rest = args[1:]
 	}
+	loadLang()
 	// version/help 不触发初始化; 其余命令先做首次引导(仅库空时动作)
 	switch verb {
 	case "version", "-v", "--version", "help", "-h", "--help", "":
@@ -965,13 +1022,16 @@ func main() {
 		cmdSessions()
 	case "watch":
 		cmdWatch(rest)
+	case "setlanguage", "lang":
+		cmdSetLanguage(rest)
 	case "version", "-v", "--version":
 		fmt.Println("cc2 " + version)
 	case "help", "-h", "--help", "":
 		cmdHelp()
 	default:
 		if strings.HasPrefix(verb, "-") {
-			fmt.Fprintf(os.Stderr, "cc2: 未知选项 %q (账号名不能以 - 开头; 参数请放在账号名之后)\n\n", verb)
+			fmt.Fprintf(os.Stderr, L("cc2: unknown option %q (account names can't start with -; put args after the account name)\n\n",
+				"cc2: 未知选项 %q (账号名不能以 - 开头; 参数请放在账号名之后)\n\n"), verb)
 			cmdHelp()
 			os.Exit(1)
 		}

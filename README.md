@@ -94,6 +94,18 @@ make release VERSION=x.y.z        # 交叉编译 dist/cc2-* + SHA256SUMS
 ./scripts/release.sh x.y.z        # 建 GitHub Release 并自动更新 homebrew-tap formula
 ```
 
+## 语言 / Language
+
+界面默认英语，可切中文：
+
+```bash
+cc2 setlanguage chinese    # 切中文
+cc2 setlanguage english    # 切回英文 (默认)
+# 或临时: CMA_LANG=zh cc2 ls
+```
+
+偏好存 `~/.cc2/.lang`；`CMA_LANG` 环境变量优先。
+
 ## 用法
 
 ```bash

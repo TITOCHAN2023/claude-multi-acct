@@ -168,7 +168,7 @@ func oneLine(s string) string {
 // 账号显示名 + 邮箱 (configDir 空 = 默认垫底)
 func accountOf(configDir string) (name, email string) {
 	if configDir == "" {
-		return "默认(垫底)", emailOf(home())
+		return L("default", "默认(垫底)"), emailOf(home())
 	}
 	return filepath.Base(configDir), emailOf(configDir)
 }
@@ -204,17 +204,19 @@ func gatherSessions() []sess {
 func cmdSessions() {
 	ss := gatherSessions()
 	if len(ss) == 0 {
-		fmt.Println("当前没有正在使用的 claude session。")
+		fmt.Println(L("No claude session is currently in use.", "当前没有正在使用的 claude session。"))
 		return
 	}
-	fmt.Printf("正在使用的 claude session (%d 个):\n", len(ss))
+	fmt.Printf(L("In-use claude sessions (%d):\n", "正在使用的 claude session (%d 个):\n"), len(ss))
 	pf := "  %s%s%s%s%s\n"
-	fmt.Printf(pf, pad("状态", 6), pad("账号", 14), pad("登录邮箱", 30), pad("项目", 26), "最近请求 / 活动")
+	fmt.Printf(pf, pad(L("STATE", "状态"), 6), pad(L("ACCOUNT", "账号"), 14),
+		pad(L("EMAIL", "登录邮箱"), 30), pad(L("PROJECT", "项目"), 26),
+		L("LATEST REQUEST / ACTIVITY", "最近请求 / 活动"))
 	fmt.Println("  " + strings.Repeat("-", 108))
 	for _, s := range ss {
-		st := "○闲"
+		st := L("○idle", "○闲")
 		if s.busy {
-			st = "●忙"
+			st = L("●busy", "●忙")
 		}
 		act := "—"
 		if !s.last.IsZero() {
@@ -222,7 +224,7 @@ func cmdSessions() {
 		}
 		title := s.title
 		if title == "" {
-			title = "(无标题)"
+			title = L("(no title)", "(无标题)")
 		}
 		proj := s.project
 		if proj == "" {
@@ -233,15 +235,16 @@ func cmdSessions() {
 		fmt.Printf(pf, pad(st, 6), pad(s.account, 14), pad(s.email, 30), pad(proj, 26),
 			title+"  ["+act+"]")
 	}
-	fmt.Println("  ●忙=90秒内有活动(近似)  ○闲=空闲等待; 账号为默认(垫底)表示未设 CLAUDE_CONFIG_DIR")
+	fmt.Println(L("  ●busy=activity within 90s (approx)  ○idle=waiting; account 'default' means no CLAUDE_CONFIG_DIR",
+		"  ●忙=90秒内有活动(近似)  ○闲=空闲等待; 账号为默认(垫底)表示未设 CLAUDE_CONFIG_DIR"))
 }
 
 func agoStr(d time.Duration) string {
 	if d < time.Minute {
-		return fmt.Sprintf("%d秒前", int(d.Seconds()))
+		return fmt.Sprintf(L("%ds ago", "%d秒前"), int(d.Seconds()))
 	}
 	if d < time.Hour {
-		return fmt.Sprintf("%d分前", int(d.Minutes()))
+		return fmt.Sprintf(L("%dm ago", "%d分前"), int(d.Minutes()))
 	}
-	return fmt.Sprintf("%d时前", int(d.Hours()))
+	return fmt.Sprintf(L("%dh ago", "%d时前"), int(d.Hours()))
 }

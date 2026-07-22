@@ -78,13 +78,17 @@ func cmdWatch(args []string) {
 	}
 	const minInterval = 15 * time.Second
 	if interval < minInterval {
-		fmt.Printf("[%s] 间隔过短(易触发用量 API 限流), 已调整为 %s\n", ts(), minInterval)
+		fmt.Printf(L("[%s] interval too short (usage API rate-limit risk), raised to %s\n",
+			"[%s] 间隔过短(易触发用量 API 限流), 已调整为 %s\n"), ts(), minInterval)
 		interval = minInterval
 	}
 
-	fmt.Printf("[%s] cc2 watch 启动: 监测默认(垫底)账号, 每 %s 检查一次, 阈值 %.0f%%\n", ts(), interval, threshold)
-	fmt.Printf("[%s] 仅在默认账号有活跃 session 时查询用量; 逼近阈值自动 cc2 use 下一个账号\n", ts())
-	fmt.Printf("[%s] 当前默认账号: %s <%s>  (Ctrl-C 退出)\n", ts(), readActive(), emailOf(home()))
+	fmt.Printf(L("[%s] cc2 watch started: watching default account, every %s, threshold %.0f%%\n",
+		"[%s] cc2 watch 启动: 监测默认(垫底)账号, 每 %s 检查一次, 阈值 %.0f%%\n"), ts(), interval, threshold)
+	fmt.Printf(L("[%s] queries usage only when the default account has an active session; auto cc2 use next account near threshold\n",
+		"[%s] 仅在默认账号有活跃 session 时查询用量; 逼近阈值自动 cc2 use 下一个账号\n"), ts())
+	fmt.Printf(L("[%s] current default account: %s <%s>  (Ctrl-C to quit)\n",
+		"[%s] 当前默认账号: %s <%s>  (Ctrl-C 退出)\n"), ts(), readActive(), emailOf(home()))
 
 	// 优雅退出
 	stop := make(chan os.Signal, 1)
@@ -96,7 +100,7 @@ func cmdWatch(args []string) {
 	for {
 		select {
 		case <-stop:
-			fmt.Printf("\n[%s] cc2 watch 已停止。\n", ts())
+			fmt.Printf(L("\n[%s] cc2 watch stopped.\n", "\n[%s] cc2 watch 已停止。\n"), ts())
 			return
 		case <-tick.C:
 			watchOnce(threshold)
@@ -110,25 +114,29 @@ func watchOnce(threshold float64) {
 	}
 	pct, ok := usageFiveHour("")
 	if !ok {
-		fmt.Printf("[%s] 默认账号有活跃 session, 但用量查询失败(token 过期?)\n", ts())
+		fmt.Printf(L("[%s] default account has an active session, but usage query failed (token expired?)\n",
+			"[%s] 默认账号有活跃 session, 但用量查询失败(token 过期?)\n"), ts())
 		return
 	}
-	fmt.Printf("[%s] 默认账号 five_hour 已用 %.0f%%\n", ts(), pct)
+	fmt.Printf(L("[%s] default account five_hour used %.0f%%\n", "[%s] 默认账号 five_hour 已用 %.0f%%\n"), ts(), pct)
 	if pct < threshold {
 		return
 	}
 	next, npct := pickNextAccount(threshold)
 	if next == "" {
-		fmt.Printf("[%s] ⚠️ 默认账号已达 %.0f%%, 但没有可切换的账号(其余都逼近上限或未登录)\n", ts(), pct)
-		notify("cc2 watch", fmt.Sprintf("默认账号用量 %.0f%%, 无可切换账号!", pct))
+		fmt.Printf(L("[%s] ⚠️ default account hit %.0f%%, but no account to switch to (others near limit or not logged in)\n",
+			"[%s] ⚠️ 默认账号已达 %.0f%%, 但没有可切换的账号(其余都逼近上限或未登录)\n"), ts(), pct)
+		notify("cc2 watch", fmt.Sprintf(L("default usage %.0f%%, no account to switch to!", "默认账号用量 %.0f%%, 无可切换账号!"), pct))
 		return
 	}
 	if err := doUse(next, false); err != nil {
-		fmt.Printf("[%s] ❌ 自动切换到 '%s' 失败: %v\n", ts(), next, err)
+		fmt.Printf(L("[%s] ❌ auto-switch to '%s' failed: %v\n", "[%s] ❌ 自动切换到 '%s' 失败: %v\n"), ts(), next, err)
 		return
 	}
-	msg := fmt.Sprintf("默认账号用量 %.0f%% -> 已自动切换为 '%s' (%.0f%%)", pct, next, npct)
+	msg := fmt.Sprintf(L("default usage %.0f%% -> auto-switched to '%s' (%.0f%%)",
+		"默认账号用量 %.0f%% -> 已自动切换为 '%s' (%.0f%%)"), pct, next, npct)
 	fmt.Printf("[%s] ✅ %s\n", ts(), msg)
-	fmt.Printf("[%s]    注: 运行中的 session 不受影响(仍用旧凭证), 新开的默认 claude 才用新账号; cc2 restore 可还原\n", ts())
-	notify("cc2 watch 自动切换", msg)
+	fmt.Printf(L("[%s]    note: running sessions are unaffected (keep old creds); newly launched default claude uses the new account; cc2 restore to undo\n",
+		"[%s]    注: 运行中的 session 不受影响(仍用旧凭证), 新开的默认 claude 才用新账号; cc2 restore 可还原\n"), ts())
+	notify(L("cc2 watch auto-switch", "cc2 watch 自动切换"), msg)
 }
