@@ -23,6 +23,9 @@ import (
 	"syscall"
 )
 
+// 版本号 (由 -ldflags "-X main.version=..." 注入; 默认 dev)
+var version = "dev"
+
 // ---------- 配置 ----------
 
 func home() string {
@@ -583,6 +586,7 @@ func cmdHelp() {
                               skip=--dangerously-skip-permissions  rc=--remote-control
   cc2 ls                    列出账号 / 模式 / 启动参数 / 登录邮箱 / 凭证状态
   cc2 rm <名字>             删除某账号目录 (从不碰 ~/.claude)
+  cc2 version               显示版本
   cc2 help                  本帮助
 
 说明:
@@ -619,9 +623,16 @@ func main() {
 		cmdUnlink(rest)
 	case "set":
 		cmdSet(rest)
+	case "version", "-v", "--version":
+		fmt.Println("cc2 " + version)
 	case "help", "-h", "--help", "":
 		cmdHelp()
 	default:
+		if strings.HasPrefix(verb, "-") {
+			fmt.Fprintf(os.Stderr, "cc2: 未知选项 %q (账号名不能以 - 开头; 参数请放在账号名之后)\n\n", verb)
+			cmdHelp()
+			os.Exit(1)
+		}
 		launch(verb, rest)
 	}
 }
