@@ -143,6 +143,41 @@ func emailOf(dir string) string {
 	return d.OAuthAccount.EmailAddress
 }
 
+// 读 <dir>/.claude.json 里 claude 缓存的用量百分比 (5小时/7天 已用%)。
+// 这是各账号上次运行 claude 时缓存的值, 非实时; 读不到返回 "-"。
+func usageOf(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, ".claude.json"))
+	if err != nil {
+		return "-"
+	}
+	var d struct {
+		Cached struct {
+			Util struct {
+				FiveHour struct {
+					U *float64 `json:"utilization"`
+				} `json:"five_hour"`
+				SevenDay struct {
+					U *float64 `json:"utilization"`
+				} `json:"seven_day"`
+			} `json:"utilization"`
+		} `json:"cachedUsageUtilization"`
+	}
+	if json.Unmarshal(b, &d) != nil {
+		return "-"
+	}
+	f, s := d.Cached.Util.FiveHour.U, d.Cached.Util.SevenDay.U
+	if f == nil && s == nil {
+		return "-"
+	}
+	part := func(p *float64) string {
+		if p == nil {
+			return "?"
+		}
+		return fmt.Sprintf("%.0f%%", *p)
+	}
+	return part(f) + "/" + part(s)
+}
+
 // flagDir=存放开关标记文件的目录 (默认账号传 CMA_HOME)
 func flagFileSkip(flagDir string) string { return filepath.Join(flagDir, ".cma-flag-skip") }
 func flagFileRC(flagDir string) string   { return filepath.Join(flagDir, ".cma-flag-rc") }
@@ -195,10 +230,7 @@ func execClaude(configDir, flagDir string, passArgs []string) {
 	// 构造环境: 清掉第三方 provider 变量; 按需设/不设 CLAUDE_CONFIG_DIR
 	var newEnv []string
 	for _, e := range os.Environ() {
-		key := e
-		if i := strings.IndexByte(e, '='); i >= 0 {
-			key = e[:i]
-		}
+		key, _, _ := strings.Cut(e, "=")
 		if providerVars[key] || key == "CLAUDE_CONFIG_DIR" {
 			continue
 		}
@@ -448,16 +480,28 @@ func pad(s string, n int) string {
 	return s
 }
 
-func row(a, b, c, d, e string) {
-	fmt.Printf("  %s%s%s%s%s\n", pad(a, 12), pad(b, 8), pad(c, 10), pad(d, 32), e)
+// 列宽: 账号 模式 启动参数 已用 邮箱 (最后一列凭证不 pad)
+var colW = []int{12, 8, 10, 12, 32}
+
+func row(cols ...string) {
+	var b strings.Builder
+	b.WriteString("  ")
+	for i, c := range cols {
+		if i < len(colW) {
+			b.WriteString(pad(c, colW[i]))
+		} else {
+			b.WriteString(c)
+		}
+	}
+	fmt.Println(b.String())
 }
 
 func cmdLs() {
 	os.MkdirAll(cmaHome(), 0o755)
 	fmt.Printf("账号根目录: %s   (启动参数默认全关, 用 cc2 set 开关)\n", cmaHome())
-	row("账号", "模式", "启动参数", "登录邮箱", "凭证")
-	fmt.Println("  " + strings.Repeat("-", 78))
-	row("默认(垫底)", "-", flagsLabel(cmaHome()), emailOf(home()), "cc 垫底,永不修改")
+	row("账号", "模式", "启动参数", "已用5h/7d", "登录邮箱", "凭证")
+	fmt.Println("  " + strings.Repeat("-", 90))
+	row("默认(垫底)", "-", flagsLabel(cmaHome()), usageOf(home()), emailOf(home()), "cc 垫底,永不修改")
 
 	entries, _ := os.ReadDir(cmaHome())
 	var names []string
@@ -482,12 +526,13 @@ func cmdLs() {
 		if loggedIn(dir, dir) {
 			status = "✓ 已登录"
 		}
-		row(name, mode, flagsLabel(dir), emailOf(dir), status)
+		row(name, mode, flagsLabel(dir), usageOf(dir), emailOf(dir), status)
 	}
 	if len(names) == 0 {
 		fmt.Println("  (还没有账号, 用 cc2 add <名字> 添加)")
 	}
 	fmt.Println("  启动参数: skip=--dangerously-skip-permissions  rc=--remote-control")
+	fmt.Println("  已用5h/7d: 各账号上次运行 claude 时缓存的用量百分比(非实时)")
 }
 
 // ---------- 轮询 ----------
@@ -519,7 +564,7 @@ func cmdNext(args []string) {
 	}
 	idx := cursor % len(names)
 	pick := names[idx]
-	os.WriteFile(rot, []byte(fmt.Sprintf("%d", (idx+1)%len(names))), 0o644)
+	os.WriteFile(rot, fmt.Appendf(nil, "%d", (idx+1)%len(names)), 0o644)
 	fmt.Printf("▶ 轮询选中账号: %s  (第 %d/%d 个)\n", pick, idx+1, len(names))
 	launch(pick, args)
 }
