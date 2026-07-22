@@ -139,6 +139,32 @@ cc2 set <账号|default> rc   on|off   # rc   = --remote-control
 
 > ⚠️ 这是唯一会**主动写入默认账号凭证**的功能（打破早期"垫底永不改"的约定）；但每次都先备份、`cc2 restore` 可还原。已验证 `use`→`restore` 对 `~/.claude.json` 字节级无损。
 
+## 会话监控 / 自动切换（sessions / watch）
+
+### `cc2 sessions` — 看所有正在使用的 claude session
+枚举正在运行的 claude 进程（= 已加载的活跃 session，不含未加载的），显示每个的 **账号 / 项目 / 标题(最近用户请求) / 忙闲 / 活动时间**：
+
+```
+cc2 sessions        # 或 cc2 ps
+```
+- 账号来自进程的 `CLAUDE_CONFIG_DIR`（无=默认垫底）。
+- 忙/闲用 session 文件最近活动时间近似（90 秒内有活动=●忙）。
+- 局限：claude 未对外暴露稳定的"此刻在执行哪个工具"接口，也不在进程 env 暴露 sessionId，所以"标题"取该项目最新 session 的首条真实用户请求；同一项目多 session 会共享标题。
+
+### `cc2 watch` — 后台常驻，逼近额度自动切账号
+只监测**默认（垫底）账号**：有活跃 session 时定期查其实时用量，`five_hour` 逼近阈值（默认 95%）就自动 `cc2 use` 下一个还有余量的账号。
+
+```bash
+cc2 watch                 # 默认: 每 60s 检查, 阈值 95%
+cc2 watch 30 90           # 每 30s 检查, 阈值 90%
+# 后台常驻:
+nohup cc2 watch > ~/.cc2/watch.log 2>&1 &
+```
+- 只在默认账号**有活跃 session 时**才查用量（省 API、避免限流；最小间隔 15s）。
+- 自动切换=覆盖默认槽位凭证（同 `cc2 use`，覆盖前自动备份，可 `cc2 restore`）。
+- **不影响运行中的 session**（它们内存里的 token 不变）；下次新开的默认 claude 才用新账号——所以你几乎无感地就换到了有余量的账号。
+- 找不到可切换账号（其余都逼近上限或未登录）时只告警、不切换，并发桌面通知。
+
 并行跑：在不同终端分别 `cc2 alpha`、`cc2 beta`、`cc2 gamma`，互不干扰，各耗各的用量。
 
 ## 独立 / 全局 两种模式

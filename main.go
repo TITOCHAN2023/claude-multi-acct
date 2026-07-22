@@ -70,7 +70,8 @@ var providerVars = map[string]bool{
 var reserved = map[string]bool{
 	"add": true, "rm": true, "ls": true, "list": true, "next": true,
 	"link": true, "unlink": true, "set": true, "default": true,
-	"use": true, "restore": true, "version": true,
+	"use": true, "restore": true, "sessions": true, "ps": true,
+	"watch": true, "version": true,
 	"help": true, "-h": true, "--help": true,
 }
 
@@ -254,29 +255,38 @@ func mergeIdentity(src, dst string) error {
 	return os.WriteFile(dst, out, 0o600)
 }
 
-// 实时查询: GET /api/oauth/usage (纯查询, 不消耗对话额度; 不刷新/不写 keychain)。
+// 实时查询原始返回: GET /api/oauth/usage (纯查询, 不消耗对话额度; 不刷新/不写 keychain)。
 // token 缺失或已过期或请求失败 -> ok=false。
-func usageLive(configDir string) (string, bool) {
+func fetchUsageRaw(configDir string) ([]byte, bool) {
 	tok, exp := oauthToken(configDir)
 	if tok == "" || (exp > 0 && exp <= nowMs()) {
-		return "", false
+		return nil, false
 	}
 	req, err := http.NewRequest("GET", "https://api.anthropic.com/api/oauth/usage", nil)
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Timeout: 6 * time.Second}).Do(req)
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", false
+		return nil, false
 	}
 	body, _ := io.ReadAll(resp.Body)
+	return body, true
+}
+
+// 实时用量显示串 "5h/7d"
+func usageLive(configDir string) (string, bool) {
+	body, ok := fetchUsageRaw(configDir)
+	if !ok {
+		return "", false
+	}
 	var d struct {
 		FiveHour *utilField `json:"five_hour"`
 		SevenDay *utilField `json:"seven_day"`
@@ -291,6 +301,21 @@ func usageLive(configDir string) (string, bool) {
 		return pctOrDash(u.U)
 	}
 	return f(d.FiveHour) + "/" + f(d.SevenDay), true
+}
+
+// 实时 five_hour 已用百分比 (数值), 供 watch 判断阈值
+func usageFiveHour(configDir string) (float64, bool) {
+	body, ok := fetchUsageRaw(configDir)
+	if !ok {
+		return 0, false
+	}
+	var d struct {
+		FiveHour *utilField `json:"five_hour"`
+	}
+	if json.Unmarshal(body, &d) != nil || d.FiveHour == nil || d.FiveHour.U == nil {
+		return 0, false
+	}
+	return *d.FiveHour.U, true
 }
 
 // 回退: 读 <dir>/.claude.json 里 claude 上次缓存的用量 (非实时)。
@@ -777,33 +802,44 @@ func cmdUse(args []string) {
 	if name == "" {
 		die("用法: cc2 use <账号> [--full]  (默认只换登录身份; --full 整体覆盖 .claude.json)")
 	}
-	dir := accountDir(name)
-	if !isDir(dir) {
-		die("账号 '%s' 不存在", name)
+	if err := doUse(name, full); err != nil {
+		die("%v", err)
 	}
-	xcred, ok := keychainRead(serviceName(dir))
-	if !ok {
-		die("账号 '%s' 没有 keychain 凭证, 先 cc2 %s 登录", name, name)
-	}
-	backupDefaultSlot() // 打破"垫底不可改", 先留后路
-	if err := keychainWrite(serviceName(""), xcred); err != nil {
-		die("写默认 keychain 失败: %v", err)
-	}
-	xjson := filepath.Join(dir, ".claude.json")
 	mode := "只换登录身份"
 	if full {
 		mode = "整体覆盖 .claude.json"
+	}
+	fmt.Printf("✅ 默认账号(cc)已切换为 '%s' <%s> [%s]\n", name, emailOf(accountDir(name)), mode)
+	fmt.Println("   不带参数的 cc/默认 claude 现在用该账号; cc2 restore 可还原上一个默认。")
+}
+
+// use 的核心: 备份默认槽位 -> 覆盖凭证 -> 覆盖/合并 .claude.json -> 记 active。
+// 供 cmdUse 与 watch 复用。
+func doUse(name string, full bool) error {
+	dir := accountDir(name)
+	if !isDir(dir) {
+		return fmt.Errorf("账号 '%s' 不存在", name)
+	}
+	xcred, ok := keychainRead(serviceName(dir))
+	if !ok {
+		return fmt.Errorf("账号 '%s' 没有 keychain 凭证, 先 cc2 %s 登录", name, name)
+	}
+	backupDefaultSlot() // 打破"垫底不可改", 先留后路
+	if err := keychainWrite(serviceName(""), xcred); err != nil {
+		return fmt.Errorf("写默认 keychain 失败: %v", err)
+	}
+	xjson := filepath.Join(dir, ".claude.json")
+	if full {
 		if err := copyFile(xjson, defaultClaudeJSON(), 0o600); err != nil {
-			die("覆盖 ~/.claude.json 失败: %v", err)
+			return fmt.Errorf("覆盖 ~/.claude.json 失败: %v", err)
 		}
 	} else {
 		if err := mergeIdentity(xjson, defaultClaudeJSON()); err != nil {
-			die("合并登录身份失败: %v", err)
+			return fmt.Errorf("合并登录身份失败: %v", err)
 		}
 	}
 	writeActive(name)
-	fmt.Printf("✅ 默认账号(cc)已切换为 '%s' <%s> [%s]\n", name, emailOf(dir), mode)
-	fmt.Println("   不带参数的 cc/默认 claude 现在用该账号; cc2 restore 可还原上一个默认。")
+	return nil
 }
 
 // cc2 restore: 从最近一次 use 前的备份还原默认槽位
@@ -861,6 +897,8 @@ func cmdHelp() {
   cc2 use <名字> [--full]    把该账号凭证覆盖到默认环境(cc 用的); 覆盖前自动备份
                               默认只换登录身份; --full 整体覆盖 .claude.json
   cc2 restore               还原 cc2 use 前备份的默认账号
+  cc2 sessions              列出所有正在使用的 claude session (账号/项目/标题/忙闲)
+  cc2 watch [间隔s] [阈值%]  常驻监测默认账号, 逼近阈值(默认95%)自动切下一个账号
   cc2 version               显示版本
   cc2 help                  本帮助
 
@@ -911,6 +949,10 @@ func main() {
 		cmdUse(rest)
 	case "restore":
 		cmdRestore()
+	case "sessions", "ps":
+		cmdSessions()
+	case "watch":
+		cmdWatch(rest)
 	case "version", "-v", "--version":
 		fmt.Println("cc2 " + version)
 	case "help", "-h", "--help", "":
