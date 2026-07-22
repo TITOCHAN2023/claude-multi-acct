@@ -668,9 +668,15 @@ func row(cols ...string) {
 	fmt.Println(b.String())
 }
 
-func cmdLs() {
+func cmdLs(args []string) {
 	os.MkdirAll(cmaHome(), 0o755)
-	names := listAccounts()
+	all := false
+	for _, a := range args {
+		if a == "-a" || a == "--all" {
+			all = true
+		}
+	}
+	names := listAccountsAll(all)
 
 	// 并发预取用量: key=dir, 结果含 显示串 + 是否实时。默认账号 key=home。
 	type ures struct {
@@ -733,13 +739,19 @@ func cmdLs() {
 	fmt.Println("  ★ = cc2 use 设为默认(cc)槽位的账号; cc2 use <账号> 切换, cc2 restore 还原")
 }
 
-// 列出 CMA_HOME 下的账号名(跳过 .isolated 备份, 只取目录)
-func listAccounts() []string {
+// 列出 CMA_HOME 下的账号名(默认跳过 . 开头的内部目录和 .isolated 备份)
+func listAccounts() []string { return listAccountsAll(false) }
+
+func listAccountsAll(all bool) []string {
 	entries, _ := os.ReadDir(cmaHome())
 	var names []string
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasSuffix(name, ".isolated") || !isDir(accountDir(name)) {
+		if !isDir(accountDir(name)) {
+			continue
+		}
+		// 内部目录: .slot-backup / .isolated 备份等 (账号名不会以 . 开头)
+		if !all && (strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".isolated")) {
 			continue
 		}
 		names = append(names, name)
@@ -892,7 +904,7 @@ func cmdHelp() {
   cc2 unlink <名字>          切回[独立]: 删除这些软链, 从备份恢复
   cc2 set <名字|default> skip|rc on|off   开关启动参数(默认全关):
                               skip=--dangerously-skip-permissions  rc=--remote-control
-  cc2 ls                    列出账号 / 模式 / 启动参数 / 登录邮箱 / 凭证状态
+  cc2 ls [-a]               列出账号 / 模式 / 启动参数 / 用量 / 邮箱 / 凭证 (-a 含内部目录)
   cc2 rm <名字>             删除某账号目录 (从不碰 ~/.claude)
   cc2 use <名字> [--full]    把该账号凭证覆盖到默认环境(cc 用的); 覆盖前自动备份
                               默认只换登录身份; --full 整体覆盖 .claude.json
@@ -936,7 +948,7 @@ func main() {
 	case "rm":
 		cmdRm(rest)
 	case "ls", "list":
-		cmdLs()
+		cmdLs(rest)
 	case "next":
 		cmdNext(rest)
 	case "link":
