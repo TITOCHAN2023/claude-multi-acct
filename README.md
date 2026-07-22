@@ -1,6 +1,6 @@
 # claude-multi-acct (cc2)
 
-官网 **多账号并行 / 轮询** 工具。核心目标：让多个 Claude 官网账号能**同时并行跑**、均摊用量，同时保证**当前账号永远垫底**——本工具任何代码路径都不会修改默认账号凭证，出任何问题都回落到默认账号。
+官网 **多账号并行 / 轮询** 工具（Go 单二进制，零第三方依赖）。核心目标：让多个 Claude 官网账号能**同时并行跑**、均摊用量，同时保证**当前账号永远垫底**——本工具任何代码路径都不会修改默认账号凭证，出任何问题都回落到默认账号。
 
 ## 为什么这样就够了（机制，反查自 `claude` 二进制 v2.1.216）
 
@@ -51,11 +51,17 @@ flowchart TD
 
 ## 安装
 
-已自动接入 `~/.bashrc`（幂等，带 `>>> claude-multi-acct` 标记）。新开终端或：
+需要 Go（1.25+）。编译成单二进制装到 `~/.local/bin/cc2`（已在 PATH）：
 
 ```bash
-source ~/.bashrc
+cd ~/Project/claude-multi-acct
+make install          # = go build -o ~/.local/bin/cc2 .
+# 自定义安装位置: make install BIN=/somewhere/cc2
 ```
+
+装好后**无需 source 任何东西**，新开终端直接用 `cc2`。数据目录默认 `~/Project/claude-multi-acct/accounts`（可用 `CMA_HOME` 覆盖）。
+
+> 早期为 shell 脚本版（`cma.sh`，需 source 到 `.bashrc`），现已用 Go 重写，去掉了对 `python3`/`shasum` 的依赖、修正了中文对齐。旧版仍在 git 历史里。
 
 ## 用法
 
@@ -127,16 +133,19 @@ stateDiagram-v2
 - 现有 `cc` / `ccr` / `ccl` / `cclr` 完全不受影响。
 - `cc2 rm` 有护栏，只删 `accounts/` 内目录，绝不误删 `~/.claude`。
 - `cc2 link` 逐个子项处理：账号自己的同名项先改名备份为 `<item>.isolated`，再软链全局同名项；`cc2 unlink` 只删指向全局的软链（`rm -f`，绝不 `rm -rf` 到目标），再从备份恢复。全程不复制/删除 `~/.claude` 内容。
-- `.claude.json`（登录身份）与 `.credentials.json`（凭证）由 `_cma_never_link` 强制排除，任何模式下都各账号独立，绝不串号。
+- `.claude.json`（登录身份）与 `.credentials.json`（凭证）由内置 `neverLink` 清单强制排除，任何模式下都各账号独立，绝不串号。
+- 启动通过 `syscall.Exec` 替换进程直接接管 claude；构造环境时清空第三方 `ANTHROPIC_*` / `CLAUDE_CODE_*` 变量，按需设/不设 `CLAUDE_CONFIG_DIR`，不污染调用者 shell。
 
 ## 配置项（环境变量，可选）
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `CMA_HOME` | `~/Project/claude-multi-acct/accounts` | 账号数据根目录 |
-| `CMA_CLAUDE_FLAGS` | `--dangerously-skip-permissions --remote-control` | 启动 claude 的固定参数，与 `cc` 一致；`cc2 <name>` / `next` / `add` 全部带上 |
+| `CMA_GLOBAL_DIR` | `~/.claude` | [全局]模式软链的目标 |
+| `CMA_GLOBAL_LINKS` | `settings.json CLAUDE.md skills plugins commands agents sessions projects todos` | [全局]模式软链的具体子项清单 |
+| `CMA_CLAUDE_FLAGS` | 空 | 额外附加的启动参数（逃生阀）；`skip`/`rc` 请用 `cc2 set` 开关 |
 
 ## 备注
 
-- `cc2 ls` 的"已登录"检测按二进制里的 hash 算法计算 keychain 服务名，属尽力而为、仅供展示，不影响启动。
-- 卸载：删掉 `~/.bashrc` 里 `>>> claude-multi-acct` 标记块即可（备份见 `~/.bashrc.bak.cma.*`）。
+- `cc2 ls` 的"已登录"检测按 keychain 服务名（`sha256(dir)[:8]`）尽力探测，仅供展示，不影响启动。
+- 卸载：`rm ~/.local/bin/cc2`，并删掉 `~/.bashrc` 里 `>>> claude-multi-acct` 标记块即可（备份见 `~/.bashrc.bak.cma*`）。
